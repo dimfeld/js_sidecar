@@ -1,0 +1,16 @@
+[package]
+name = "js_sidecar"
+version = "0.1.0"
+edition = "2021"
+description = "Run a pool of JavaScript engines"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/dimfeld/js_sidecar"
+homepage = "https://github.com/dimfeld/js_sidecar"
+documentation = "https://docs.rs/js_sidecar"
+
+[dependencies]
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.121"
+thiserror = "1.0.63"
+tokio = { version = "1.36.0", features = ["macros", "rt", "signal", "sync", "time"] }
+tracing = "0.1.40"
