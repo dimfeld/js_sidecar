@@ -1,0 +1,130 @@
+import net from 'net';
+import { EventEmitter } from 'events';
+
+// Message types
+// Host-to-worker
+export enum HostToWorkerMessage {
+  RunRequest = 0,
+}
+
+// Worker-to-host
+export enum WorkerToHostMessage {
+  RunResponse = 0x1000,
+  Log = 0x1001,
+  Error = 0x1002,
+}
+
+export interface IncomingMessage {
+  id: number;
+  reqId: number;
+  type: HostToWorkerMessage;
+  data: Buffer;
+}
+
+// Header *without* the length field
+const MSG_HEADER_LENGTH = 12;
+
+// Offsets from just after the length field.
+const REQ_ID_OFFSET = 0;
+const MSG_ID_OFFSET = 4;
+const MSG_TYPE_OFFSET = 8;
+
+/** A simple protocol in which each message has an ID, a type, and some data
+ *
+ *  Format
+ *
+ *  0: length
+ *  4: request ID, links the message to a particular run
+ *  8: message ID, unique per message within a request
+ *  12: message type
+ *  ... type-specific data follows
+ * */
+export class Protocol extends EventEmitter<{ message: [IncomingMessage] }> {
+  socket: net.Socket;
+  buffer: Buffer;
+  expectedLength: number | null;
+  id: number;
+
+  constructor(socket: net.Socket) {
+    super();
+    this.socket = socket;
+    this.buffer = Buffer.alloc(0);
+    this.expectedLength = null;
+    this.id = 0;
+    this.socket.on('data', (data) => this.handleData(data));
+  }
+
+  handleData(data: Buffer) {
+    this.buffer = Buffer.concat([this.buffer, data]);
+
+    while (this.buffer.length > 0) {
+      if (this.expectedLength === null) {
+        if (this.buffer.length < 4) {
+          // Not enough data yet to read length
+          return;
+        }
+        this.expectedLength = this.buffer.readUInt32LE(0);
+        this.buffer = this.buffer.subarray(4);
+      }
+
+      // Not enough data for full message
+      if (this.buffer.length < this.expectedLength) {
+        return;
+      }
+
+      const reqId = this.buffer.readUInt32LE(REQ_ID_OFFSET);
+      const id = this.buffer.readUInt32LE(MSG_ID_OFFSET);
+      const type = this.buffer.readUInt32LE(MSG_TYPE_OFFSET);
+      const data = this.buffer.subarray(12, this.expectedLength);
+
+      // Remove the message from the pending buffer
+      this.buffer = this.buffer.subarray(this.expectedLength);
+      this.expectedLength = null;
+
+      const message = {
+        id,
+        reqId,
+        type,
+        data,
+      };
+
+      // Emit the received message
+      this.emit('message', message);
+    }
+  }
+
+  sendMessage(reqId: number, type: WorkerToHostMessage, message: string | Buffer) {
+    let id = this.id++;
+    const header = Buffer.allocUnsafe(MSG_HEADER_LENGTH + 4);
+    header.writeUInt32LE(message.length + MSG_HEADER_LENGTH);
+    header.writeUInt32LE(reqId, REQ_ID_OFFSET + 4);
+    header.writeUInt32LE(id, MSG_ID_OFFSET + 4);
+    header.writeUInt32LE(type, MSG_TYPE_OFFSET + 4);
+
+    if (!(message instanceof Buffer)) {
+      message = Buffer.from(message);
+    }
+
+    this.socket.write(Buffer.concat([header, message]));
+    return id;
+  }
+
+  log(reqId: number, level: string, message: string | object) {
+    let data = JSON.stringify({ level, message });
+    this.sendMessage(reqId, WorkerToHostMessage.Log, data);
+  }
+
+  respond(reqId: number, data: unknown) {
+    this.sendMessage(reqId, WorkerToHostMessage.RunResponse, JSON.stringify(data));
+  }
+
+  error(reqId: number, e: object) {
+    let message = e;
+    if (message instanceof Error) {
+      message = { message: message.message, stack: message.stack };
+    }
+
+    let data = JSON.stringify(message);
+    this.sendMessage(reqId, WorkerToHostMessage.Error, data);
+  }
+}
