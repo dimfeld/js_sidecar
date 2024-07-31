@@ -1,18 +1,6 @@
 import net from 'net';
 import { EventEmitter } from 'events';
-
-// Message types
-// Host-to-worker
-export enum HostToWorkerMessage {
-  RunRequest = 0,
-}
-
-// Worker-to-host
-export enum WorkerToHostMessage {
-  RunResponse = 0x1000,
-  Log = 0x1001,
-  Error = 0x1002,
-}
+import { HostToWorkerMessage, WorkerToHostMessage } from './api_types.js';
 
 export interface IncomingMessage {
   id: number;

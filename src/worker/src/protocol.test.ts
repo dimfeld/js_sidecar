@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import net from 'net';
-import { Protocol, HostToWorkerMessage, WorkerToHostMessage } from './protocol';
+import { Protocol } from './protocol';
+import { HostToWorkerMessage, WorkerToHostMessage } from './api_types';
 
 describe('Protocol', () => {
   let mockSocket: net.Socket;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MessageContext } from './types.js';
-import { runScript, type RunScriptArgs } from './run_script';
+import { runScript } from './run_script';
+import type { RunScriptArgs } from './api_types.js';
 
 describe('runScript', () => {
   const createMessageContext = (): MessageContext => ({
@@ -76,6 +77,39 @@ describe('runScript', () => {
         {
           name: 'customModule2',
           code: 'export function double(x) { return x * 2; }',
+        },
+      ],
+    };
+
+    const result = await runScript(args, createMessageContext());
+    expect(result.globals.output).toBe(10);
+  });
+
+  it('should run scripts with cyclic depdendencies in modules', async () => {
+    const args: RunScriptArgs = {
+      name: 'test-modules',
+      code: `
+        import { double } from 'customModule';
+        output = double(5);
+      `,
+      globals: { output: null },
+      modules: [
+        // The order of these is important since it ensures that modules can reference each other
+        // even when the are passed "out of order."
+        {
+          name: 'customModule',
+          code: `
+            import * as fns from 'customModule2';
+            export const multiplier = 2;
+            export function double(x) { return fns.double(x); }
+          `,
+        },
+        {
+          name: 'customModule2',
+          code: `
+            import { multiplier } from 'customModule';
+            export function double(x) { return x * multiplier; }
+          `,
         },
       ],
     };
