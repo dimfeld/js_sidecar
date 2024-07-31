@@ -1,6 +1,7 @@
 import net from 'net';
-import { EventEmitter } from 'events';
 import { HostToWorkerMessage, Protocol, type IncomingMessage } from './protocol.js';
+import type { MessageContext } from './types.js';
+import { runScript } from './run_script.js';
 
 export function runWorker(socketPath: string) {
   console.log(`Worker ${process.pid} started`);
@@ -33,15 +34,6 @@ export function runWorker(socketPath: string) {
       shutdown();
     }
   });
-}
-
-interface MessageContext {
-  protocol: Protocol;
-  reqId: number;
-  id: number;
-  log(message: any, level?: keyof Console): void;
-  respond(data: any): void;
-  error(e: Error): void;
 }
 
 function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: IncomingMessage) {
@@ -82,5 +74,9 @@ async function handleMessage(
   type: HostToWorkerMessage,
   data: Buffer
 ): Promise<any> {
-  return undefined;
+  switch (type) {
+    case HostToWorkerMessage.RunRequest: {
+      return runScript(JSON.parse(data.toString()), ctx);
+    }
+  }
 }
