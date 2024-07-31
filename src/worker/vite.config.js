@@ -8,9 +8,6 @@ export default defineConfig({
     outDir: 'dist',
     target: ['node20'],
     sourcemap: true,
-    assetsDir: production ? '_app/immutable' : '_app/dev',
-    copyPublicDir: true,
-    manifest: true,
     minify: production,
     rollupOptions: {
       input: "src/index.ts"
