@@ -19,10 +19,13 @@
   "scripts": {
     "build": "vite build --ssr",
     "dev": "NODE_ENV=development vite build --ssr --mode development --watch",
-    "test": "vitest",
+    "test": "NODE_OPTIONS=--experimental-vm-modules vitest",
     "lint": "prettier --check . && eslint .",
     "format": "prettier --write ."
   },
   "type": "module",
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "lru-cache": "^11.0.0"
+  }
 }

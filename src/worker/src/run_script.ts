@@ -45,8 +45,14 @@ async function createContext(ctx: MessageContext, args: RunScriptArgs) {
 
   let linkedModules: Record<string, vm.Module> = {};
 
-  function doLink(specifier: string, referencingModule: vm.Module) {
+  async function doLink(specifier: string, referencingModule: vm.Module) {
     if (specifier in linkedModules) {
+      return linkedModules[specifier];
+    }
+
+    let modArgs = args.modules?.find((m) => m.name === specifier);
+    if (modArgs) {
+      await createModule(modArgs);
       return linkedModules[specifier];
     }
 
@@ -55,15 +61,24 @@ async function createContext(ctx: MessageContext, args: RunScriptArgs) {
     );
   }
 
+  async function createModule(modArgs: CodeModule) {
+    if (modArgs.name in linkedModules) {
+      // Already did this one
+      return;
+    }
+
+    let mod = new vm.SourceTextModule(modArgs.code, { identifier: modArgs.name, context: runCtx });
+    await mod.link(doLink);
+    await mod.evaluate();
+    linkedModules[modArgs.name] = mod;
+  }
+
   for (const fn of args.functions ?? []) {
     runCtx[fn.name] = vm.compileFunction(fn.code, fn.params, { parsingContext: runCtx });
   }
 
   for (const modArgs of args.modules ?? []) {
-    let mod = new vm.SourceTextModule(modArgs.code, { identifier: modArgs.name, context: runCtx });
-    await mod.link(doLink);
-    await mod.evaluate();
-    linkedModules[modArgs.name] = mod;
+    createModule(modArgs);
   }
 
   return { context: runCtx, doLink };
@@ -75,7 +90,7 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext) {
   let retVal;
 
   if (args.expr) {
-    let retVal = vm.runInContext(args.code, run.context, {
+    retVal = vm.runInContext(args.code, run.context, {
       filename: args.name,
       timeout: args.timeoutMs,
     });
