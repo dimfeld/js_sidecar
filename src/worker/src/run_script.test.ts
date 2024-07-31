@@ -5,7 +5,9 @@ import type { RunScriptArgs } from './api_types.js';
 
 describe('runScript', () => {
   const createMessageContext = (): MessageContext => ({
-    protocol: 'test-protocol' as any,
+    protocol: {
+      cache: new Map(),
+    } as any,
     reqId: 1,
     id: 1,
     log: () => {},
@@ -61,7 +63,7 @@ describe('runScript', () => {
       name: 'test-modules',
       code: `
         import { double } from 'customModule';
-        output = double(5);
+        output = await double(5);
       `,
       globals: { output: null },
       modules: [
@@ -71,7 +73,7 @@ describe('runScript', () => {
           name: 'customModule',
           code: `
             import * as fns from 'customModule2';
-            export function double(x) { return fns.double(x); }
+            export async function double(x) { return fns.double(x); }
           `,
         },
         {
@@ -82,7 +84,7 @@ describe('runScript', () => {
     };
 
     const result = await runScript(args, createMessageContext());
-    expect(result.globals.output).toBe(10);
+    expect(result.globals?.output).toBe(10);
   });
 
   it('should run scripts with cyclic depdendencies in modules', async () => {
@@ -115,7 +117,7 @@ describe('runScript', () => {
     };
 
     const result = await runScript(args, createMessageContext());
-    expect(result.globals.output).toBe(10);
+    expect(result.globals?.output).toBe(10);
   });
 
   it('should return specified keys from the context', async () => {
@@ -179,5 +181,92 @@ describe('runScript', () => {
     };
 
     await expect(runScript(args, createMessageContext())).rejects.toThrow('Test error');
+  });
+
+  it('reuse context across calls', async () => {
+    const ctx = createMessageContext();
+
+    const args: RunScriptArgs = {
+      name: 'test-modules',
+      code: `
+        import { double } from 'customModule';
+        output = double(5);
+      `,
+      globals: { output: null },
+      modules: [
+        // The order of these is important since it ensures that modules can reference each other
+        // even when the are passed "out of order."
+        {
+          name: 'customModule',
+          code: `
+            import * as fns from 'customModule2';
+            export const multiplier = 2;
+            export function double(x) { return fns.double(x); }
+          `,
+        },
+        {
+          name: 'customModule2',
+          code: `
+            import { multiplier } from 'customModule';
+            export function double(x) { return x * multiplier; }
+          `,
+        },
+      ],
+    };
+
+    const result = await runScript(args, ctx);
+    expect(result.globals?.output).toBe(10);
+
+    const args2: RunScriptArgs = {
+      name: 'test2',
+      code: `
+        import { double } from 'customModule';
+        output = double(10);
+      `,
+    };
+
+    const result2 = await runScript(args2, ctx);
+    expect(result2.globals?.output).toBe(20);
+  });
+
+  it('initialize context and use it later', async () => {
+    const ctx = createMessageContext();
+
+    const args: RunScriptArgs = {
+      name: 'init',
+      globals: { output: null },
+      modules: [
+        // The order of these is important since it ensures that modules can reference each other
+        // even when the are passed "out of order."
+        {
+          name: 'customModule',
+          code: `
+            import * as fns from 'customModule2';
+            export const multiplier = 2;
+            export function double(x) { return fns.double(x); }
+          `,
+        },
+        {
+          name: 'customModule2',
+          code: `
+            import { multiplier } from 'customModule';
+            export function double(x) { return x * multiplier; }
+          `,
+        },
+      ],
+    };
+
+    await runScript(args, ctx);
+
+    const args2: RunScriptArgs = {
+      name: 'test2',
+      code: `
+        import { double } from 'customModule';
+        output = double(10);
+      `,
+    };
+
+    const result2 = await runScript(args2, ctx);
+    expect(result2.globals?.output).toBe(20);
   });
 });

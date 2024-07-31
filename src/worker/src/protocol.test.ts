@@ -29,14 +29,14 @@ describe('Protocol', () => {
     message.writeUInt32LE(12, 0); // Length
     message.writeUInt32LE(1, 4); // Request ID
     message.writeUInt32LE(2, 8); // Message ID
-    message.writeUInt32LE(HostToWorkerMessage.RunRequest, 12); // Message Type
+    message.writeUInt32LE(HostToWorkerMessage.RunScript, 12); // Message Type
 
     protocol.handleData(message);
 
     expect(messageListener).toHaveBeenCalledWith({
       id: 2,
       reqId: 1,
-      type: HostToWorkerMessage.RunRequest,
+      type: HostToWorkerMessage.RunScript,
       data: Buffer.alloc(0),
     });
   });
@@ -52,7 +52,7 @@ describe('Protocol', () => {
     const part2 = Buffer.alloc(10);
     part2.writeUInt16LE(0, 0); // Rest of Request ID
     part2.writeUInt32LE(2, 2); // Message ID
-    part2.writeUInt32LE(HostToWorkerMessage.RunRequest, 6); // Message Type
+    part2.writeUInt32LE(HostToWorkerMessage.RunScript, 6); // Message Type
 
     protocol.handleData(part1);
     expect(messageListener).not.toHaveBeenCalled();
@@ -61,7 +61,7 @@ describe('Protocol', () => {
     expect(messageListener).toHaveBeenCalledWith({
       id: 2,
       reqId: 1,
-      type: HostToWorkerMessage.RunRequest,
+      type: HostToWorkerMessage.RunScript,
       data: Buffer.alloc(0),
     });
   });

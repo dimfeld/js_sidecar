@@ -3,7 +3,8 @@
 // Message types
 // Host-to-worker
 export enum HostToWorkerMessage {
-  RunRequest = 0,
+  /** Run a script, optionally supplying globals and code modules. */
+  RunScript = 0,
 }
 
 // Worker-to-host
@@ -28,13 +29,17 @@ export interface CodeModule {
 
 export interface RunScriptArgs {
   name: string;
-  code: string;
+  code?: string;
 
-  // If true, the code is just a simple expression and should run on its own.
-  // Expression mode supports returning a value directly, but does not support specifying `modules`.
+  /** Recreate the run context instead of reusing the context from the previous run on this
+   * connection. */
+  recreateContext?: boolean;
+
+  /** If true, the code is just a simple expression and should run on its own.
+   Expression mode supports returning a value directly, but does not support specifying `modules`. */
   expr?: boolean;
 
-  globals: object;
+  globals?: object;
   timeoutMs?: number;
   functions?: FunctionDef[];
   modules?: CodeModule[];

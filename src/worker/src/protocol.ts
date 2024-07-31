@@ -33,6 +33,8 @@ export class Protocol extends EventEmitter<{ message: [IncomingMessage] }> {
   expectedLength: number | null;
   id: number;
 
+  cache: Map<any, any> = new Map();
+
   constructor(socket: net.Socket) {
     super();
     this.socket = socket;

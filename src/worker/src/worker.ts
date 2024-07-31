@@ -1,7 +1,8 @@
 import net from 'net';
-import { HostToWorkerMessage, Protocol, type IncomingMessage } from './protocol.js';
+import { Protocol, type IncomingMessage } from './protocol.js';
 import type { MessageContext } from './types.js';
 import { runScript } from './run_script.js';
+import { HostToWorkerMessage } from './api_types.js';
 
 export function runWorker(socketPath: string) {
   console.log(`Worker ${process.pid} started`);
@@ -75,7 +76,7 @@ async function handleMessage(
   data: Buffer
 ): Promise<any> {
   switch (type) {
-    case HostToWorkerMessage.RunRequest: {
+    case HostToWorkerMessage.RunScript: {
       return runScript(JSON.parse(data.toString()), ctx);
     }
   }
