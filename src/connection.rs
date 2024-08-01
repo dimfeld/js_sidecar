@@ -136,6 +136,12 @@ pub struct Connection {
     receiver: mpsc::Receiver<WorkerToHostMessage>,
 }
 
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection").finish_non_exhaustive()
+    }
+}
+
 impl Connection {
     fn new(stream: UnixStream) -> Result<Self, Error> {
         let (sender, receiver) = mpsc::channel(16);
@@ -180,6 +186,11 @@ mod tests {
 
     use super::*;
     use crate::protocol::WorkerToHostMessageData;
+
+    // Compile error if Connection is not Send + Sync
+    #[allow(dead_code)]
+    trait IsSync: Send + Sync {}
+    impl IsSync for Connection {}
 
     #[tokio::test]
     async fn regular_execution() {
@@ -228,7 +239,7 @@ mod tests {
         };
 
         assert_eq!(response.globals["output"], json!(20));
-        // sidecar.close().await;
+        sidecar.close().await;
     }
 
     #[tokio::test]
