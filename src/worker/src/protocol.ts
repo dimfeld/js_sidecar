@@ -1,5 +1,5 @@
-import net from 'net';
-import { EventEmitter } from 'events';
+import net from 'node:net';
+import { EventEmitter } from 'node:events';
 import { HostToWorkerMessage, WorkerToHostMessage, type RunResponse } from './api_types.js';
 
 export interface IncomingMessage {

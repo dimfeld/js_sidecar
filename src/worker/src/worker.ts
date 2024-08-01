@@ -1,5 +1,5 @@
-import net from 'net';
-import cluster from 'cluster';
+import net from 'node:net';
+import cluster from 'node:cluster';
 import { Protocol, type IncomingMessage } from './protocol.js';
 import type { MessageContext } from './types.js';
 import { runScript } from './run_script.js';

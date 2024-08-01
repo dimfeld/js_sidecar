@@ -1,6 +1,6 @@
-import cluster from 'cluster';
-import os from 'os';
-import fs from 'fs';
+import cluster from 'node:cluster';
+import os from 'node:os';
+import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 
 import { runWorker } from './worker.js';
