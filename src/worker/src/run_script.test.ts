@@ -269,4 +269,53 @@ describe('runScript', () => {
     const result2 = await runScript(args2, ctx);
     expect(result2.globals?.output).toBe(20);
   });
+
+  it('allows two runs with the same name', async () => {
+    const ctx = createMessageContext();
+    const args: RunScriptArgs = {
+      name: 'run',
+      globals: { output: null },
+      code: `
+        import { double } from 'customModule';
+        output = double(10);
+      `,
+      modules: [
+        // The order of these is important since it ensures that modules can reference each other
+        // even when the are passed "out of order."
+        {
+          name: 'customModule',
+          code: `
+            import * as fns from 'customModule2';
+            export function double(x) { return fns.double(x); }
+          `,
+        },
+        {
+          name: 'customModule2',
+          code: `
+            import { multiplier } from 'values';
+            export function double(x) { return x * multiplier; }
+          `,
+        },
+        {
+          name: 'values',
+          code: 'export const multiplier = 2;',
+        },
+      ],
+    };
+
+    const result = await runScript(args, ctx);
+    expect(result.globals?.output).toBe(20);
+
+    const args2: RunScriptArgs = {
+      name: 'run',
+      globals: { output: null },
+      code: `
+        import { double } from 'customModule';
+        output = double(20);
+      `,
+    };
+
+    const result2 = await runScript(args2, ctx);
+    expect(result2.globals?.output).toBe(40);
+  });
 });
