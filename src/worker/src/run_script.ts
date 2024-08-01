@@ -1,6 +1,6 @@
 import * as vm from 'vm';
 import type { MessageContext } from './types.js';
-import type { RunScriptArgs } from './api_types.js';
+import type { RunResponse, RunScriptArgs } from './api_types.js';
 
 const RUN_CTX_KEY = Symbol('runCtx');
 
@@ -54,7 +54,7 @@ function createContext(ctx: MessageContext, args: RunScriptArgs): RunContext {
   return runCtx;
 }
 
-export async function runScript(args: RunScriptArgs, ctx: MessageContext) {
+export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promise<RunResponse> {
   let run = createContext(ctx, args);
 
   let retVal;
