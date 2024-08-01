@@ -24,13 +24,14 @@ if (cluster.isPrimary) {
 
   const numWorkers = parseInt(values.workers ?? '1', 10);
   const socketPath = values.socket;
+  let shuttingDown = false;
 
   if (!socketPath) {
     throw new Error('No socket path provided');
   }
 
-  // Clean up the socket file when the process exits in case
   process.on('exit', () => {
+    // Make sure to clean up the socket file when the process exits
     try {
       fs.unlinkSync(socketPath);
     } catch (e) {}
@@ -47,12 +48,12 @@ if (cluster.isPrimary) {
 
     worker.on('message', (msg) => {
       if (msg === 'ready' && shuttingDown) {
+        // We started shutting down between when this worker was forked and when it
+        // started listening to messages, so tell it again.
         worker.send('shutdown');
       }
     });
   }
-
-  let shuttingDown = false;
 
   const shutdown = () => {
     debug('shutting down');
@@ -80,6 +81,7 @@ if (cluster.isPrimary) {
   cluster.on('exit', (worker, code, signal) => {
     debug('exit', worker.process.pid, code, signal, shuttingDown, socketPath);
     if (!shuttingDown && !fs.existsSync(filename)) {
+      // This happens when the Rust side shuts down somewhat uncleanly.
       debug(`${socketPath} script is gone, shutting down`);
       shutdown();
     }

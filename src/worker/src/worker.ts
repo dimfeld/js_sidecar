@@ -22,6 +22,9 @@ export function runWorker(socketPath: string) {
     }
   });
 
+  // Tell the primary that we are now listening to messages. This prevents a race condition
+  // where shutdown triggers while this worker is starting up, and so the shutdown messages
+  // arrives before we are listening for them.
   cluster.worker?.send('ready');
 
   process.on('SIGTERM', shutdown);
