@@ -27,8 +27,8 @@ pub struct CodeModule {
 pub struct RunScriptArgs {
     pub name: Cow<'static, str>,
 
-    /// The code to run. This can be omitted if the message is just initializing the context for later runs.
-    pub code: Option<Cow<'static, str>>,
+    /// The code to run. This can be empty if the message is just initializing the context for later runs.
+    pub code: Cow<'static, str>,
 
     /// Recreate the run context instead of reusing the context from the previous run on this connection.
     pub recreate_context: bool,
@@ -38,7 +38,7 @@ pub struct RunScriptArgs {
     pub expr: bool,
 
     /// Global variables to set in the context.
-    pub globals: Option<HashMap<String, serde_json::Value>>,
+    pub globals: HashMap<Cow<'static, str>, serde_json::Value>,
 
     /// How long to wait for the script to complete.
     pub timeout_ms: Option<u64>,
@@ -73,12 +73,12 @@ impl Default for RunScriptArgs {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct RunResponseData {
     #[serde(default)]
     pub globals: HashMap<String, serde_json::Value>,
     #[serde(default)]
-    pub return_value: serde_json::Value,
+    pub return_value: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,5 +90,5 @@ pub struct ErrorResponseData {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LogResponseData {
     pub level: String,
-    pub data: serde_json::Value,
+    pub message: serde_json::Value,
 }

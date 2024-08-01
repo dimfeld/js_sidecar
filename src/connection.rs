@@ -1,90 +1,171 @@
-use std::{
-    error::Error,
-    os::unix::net::UnixStream,
-    path::PathBuf,
+use std::{ffi::OsStr, io, path::PathBuf, process::Stdio, sync::atomic::AtomicU64, time::Duration};
+
+use tempfile::NamedTempFile;
+use tokio::{
+    io::AsyncWriteExt,
+    net::{unix::OwnedWriteHalf, UnixStream},
     process::{Child, Command},
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::mpsc,
 };
 
-use tokio::sync::mpsc;
+use crate::{
+    messages::RunScriptArgs,
+    protocol::{HostToWorkerMessage, HostToWorkerMessageData, WorkerToHostMessage},
+    Error,
+};
 
-use crate::protocol::{HostToWorkerMessage, HostToWorkerMessageData, WorkerToHostMessage};
+const SCRIPT: &str = include_str!("./worker/dist/index.js");
 
 /// To ensure unique sockets per instance
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct JsSidecar {
-    node_process: Child,
+    node_process: Option<Child>,
     socket_path: PathBuf,
+    _script_file: NamedTempFile,
 }
 
 impl JsSidecar {
-    pub fn new(node_script_path: &str) -> Result<Self, Box<dyn Error>> {
+    pub async fn new() -> Result<Self, Error> {
         let pid = std::process::id();
-        let counter = COUNTER.fetch_add(1, std::sync::Ordering::Relaxed);
+        let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temp_dir = std::env::temp_dir();
         let socket_path = temp_dir.join(format!("js_sidecar.{}.{}.sock", pid, counter));
 
+        let input_script = tempfile::Builder::new()
+            .prefix("js_sidecar")
+            .suffix(".mjs")
+            .tempfile()
+            .map_err(Error::StartWorker)?;
+
+        let script_path = input_script.path();
+
+        tokio::fs::write(script_path, SCRIPT.as_bytes())
+            .await
+            .map_err(Error::StartWorker)?;
+
         let node_process = Command::new("node")
-            .arg(node_script_path)
+            // Enable ES Module functionality in vm package
+            .arg("--experimental-vm-modules")
+            .arg(script_path)
             .arg("--socket")
             .arg(&socket_path)
-            .spawn()?;
+            .spawn()
+            .map_err(Error::StartWorker)?;
+
+        let mut checks = 0;
+
+        while checks < 50 {
+            // Wait for the socket to appear
+            // TODO This should really have a better interlock
+            if std::fs::metadata(&socket_path).is_ok() {
+                break;
+            }
+            // Wait until the socket exists and can be connected
+            let stream = UnixStream::connect(&socket_path).await;
+            if stream.is_ok() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            checks += 1;
+        }
+
+        if checks == 50 {
+            return Err(Error::StartWorker(io::Error::other(
+                "Timed out waiting for socket to be ready",
+            )));
+        }
 
         Ok(JsSidecar {
-            node_process,
+            node_process: Some(node_process),
             socket_path,
+            // Make sure we keep the script file alive as long as the sidecar is alive.
+            _script_file: input_script,
         })
     }
 
     /// Create a new connection with its own run context.
-    pub fn connect(&self) -> Result<Connection, Box<dyn Error>> {
-        let stream = UnixStream::connect(&self.socket_path)?;
+    pub async fn connect(&self) -> Result<Connection, Error> {
+        // TODO add retries here
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(Error::ConnectWorker)?;
         Connection::new(stream)
     }
 
-    pub fn close(&self) {
-        self.node_process.kill().ok();
+    pub async fn close(&mut self) {
+        if let Some(child) = self.node_process.take() {
+            Self::close_child(child).await;
+        }
+    }
+
+    async fn close_child(mut child: Child) {
+        let Some(pid) = child.id() else {
+            // child has already exited
+            return;
+        };
+
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::SIGTERM,
+        )
+        .ok();
+
+        let term_result = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+
+        if term_result.is_err() {
+            // The child didn't shut down, so force it.
+            child.kill().await.ok();
+        }
     }
 }
 
 impl Drop for JsSidecar {
     fn drop(&mut self) {
-        self.node_process.kill().ok();
+        if let Some(child) = self.node_process.take() {
+            tokio::task::spawn(async move {
+                Self::close_child(child).await;
+            });
+        }
     }
 }
 
 pub struct Connection {
-    stream: UnixStream,
+    stream: OwnedWriteHalf,
     receiver: mpsc::Receiver<WorkerToHostMessage>,
 }
 
 impl Connection {
-    fn new(stream: UnixStream) -> Result<Self, Box<dyn Error>> {
-        let (sender, receiver) = mpsc::channel(100);
-        let stream = stream;
-        let read_steam = stream.try_clone()?;
+    fn new(stream: UnixStream) -> Result<Self, Error> {
+        let (sender, receiver) = mpsc::channel(16);
+        let (mut read_stream, write_stream) = stream.into_split();
 
-        tokio::spawn(async move {
+        tokio::task::spawn(async move {
             loop {
-                match WorkerToHostMessage::read_from(&mut read_stream) {
+                match WorkerToHostMessage::read_from(&mut read_stream).await {
                     Ok(message) => {
                         if sender.send(message).await.is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!("Failed to read message from worker: {e:?}");
+                        break;
+                    }
                 }
             }
         });
 
-        Ok(Connection { stream, receiver })
+        Ok(Connection {
+            stream: write_stream,
+            receiver,
+        })
     }
 
-    pub fn send_run_script(&self, args: RunScriptArgs) -> Result<(), Box<dyn Error>> {
+    pub async fn run_script(&mut self, args: RunScriptArgs) -> Result<(), Error> {
         let message = HostToWorkerMessage::new(0, 0, HostToWorkerMessageData::RunScript(args));
-        let mut stream = self.stream.lock().unwrap();
-        message.write_to(&mut stream)?;
+        message.write_to(&mut self.stream).await?;
         Ok(())
     }
 
@@ -93,28 +174,102 @@ impl Connection {
     }
 }
 
-impl Drop for Connection {
-    fn drop(&mut self) {
-        self.stream.shutdown(std::net::Shutdown::Both).ok();
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::protocol::WorkerToHostMessageData;
 
     #[tokio::test]
-    async fn test_js_sidecar() {
-        let sidecar = JsSidecar::new("path/to/node/script.js").unwrap();
-        let mut connection = sidecar.connect().unwrap();
+    async fn regular_execution() {
+        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut connection = sidecar.connect().await.unwrap();
 
         let args = RunScriptArgs {
-            code: "console.log('Hello, World!');".to_string(),
+            code: r##"
+                console.log('Hello, World!');
+                output = output + 15;
+            "##
+            .into(),
+            globals: [("output".into(), json!(5))].into_iter().collect(),
+            ..Default::default()
         };
-        connection.send_run_script(args).unwrap();
+        connection.run_script(args).await.unwrap();
+
+        let mut messages = Vec::new();
 
         while let Some(message) = connection.receive_message().await {
-            println!("Received message: {:?}", message);
+            let finished = matches!(message.data, WorkerToHostMessageData::RunResponse(_));
+            println!("{message:#?}");
+            messages.push(message);
+
+            if finished {
+                drop(connection);
+                break;
+            }
         }
+
+        assert_eq!(messages.len(), 2);
+
+        let console_msg = &messages[0];
+
+        let WorkerToHostMessageData::Log(log) = &console_msg.data else {
+            panic!("Expected log message, saw {console_msg:#?}");
+        };
+
+        assert_eq!(log.message, json!(["Hello, World!"]));
+        assert_eq!(log.level, "info");
+
+        let response_msg = &messages[1];
+
+        let WorkerToHostMessageData::RunResponse(response) = &response_msg.data else {
+            panic!("Expected response message, saw {response_msg:#?}");
+        };
+
+        assert_eq!(response.globals["output"], json!(20));
+        // sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn expression_execution() {
+        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut connection = sidecar.connect().await.unwrap();
+
+        let args = RunScriptArgs {
+            code: r##"
+                output + 15
+            "##
+            .into(),
+            expr: true,
+            globals: [("output".into(), json!(5))].into_iter().collect(),
+            ..Default::default()
+        };
+        connection.run_script(args).await.unwrap();
+
+        let mut messages = Vec::new();
+
+        while let Some(message) = connection.receive_message().await {
+            let finished = matches!(message.data, WorkerToHostMessageData::RunResponse(_));
+            println!("{message:#?}");
+            messages.push(message);
+
+            if finished {
+                break;
+            }
+        }
+
+        assert_eq!(messages.len(), 1);
+
+        let response_msg = &messages[0];
+
+        let WorkerToHostMessageData::RunResponse(response) = &response_msg.data else {
+            panic!("Expected response message, saw {response_msg:#?}");
+        };
+
+        assert_eq!(response.return_value, Some(json!(20)));
+
+        drop(connection);
+        sidecar.close().await;
     }
 }

@@ -1,16 +1,28 @@
 import net from 'net';
+import cluster from 'cluster';
 import { Protocol, type IncomingMessage } from './protocol.js';
 import type { MessageContext } from './types.js';
 import { runScript } from './run_script.js';
 import { HostToWorkerMessage } from './api_types.js';
+import { debug } from './debug.js';
 
 export function runWorker(socketPath: string) {
-  console.log(`Worker ${process.pid} started`);
+  debug(`Worker ${process.pid} started`);
   const server = net.createServer();
   const shutdown = () => {
-    console.log(`Worker ${process.pid} is shutting down`);
+    debug(`Worker ${process.pid} is shutting down`);
     server.close(() => process.exit(0));
   };
+
+  process.on('message', (msg) => {
+    debug(`Worker ${process.pid} received message: ${msg}`);
+    if (msg == 'shutdown') {
+      debug(`Worker ${process.pid} received shutdown message`);
+      shutdown();
+    }
+  });
+
+  cluster.worker?.send('ready');
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
@@ -21,19 +33,13 @@ export function runWorker(socketPath: string) {
   }
 
   server.on('error', (e) => {
-    console.error(e);
+    debug(e);
     process.exit(1);
   });
 
   server.listen(socketPath, () => {
-    console.log(`Worker ${process.pid} is listening on ${socketPath}`);
+    debug(`Worker ${process.pid} is listening on ${socketPath}`);
     server.on('connection', accept);
-  });
-
-  process.on('message', (msg) => {
-    if (msg == 'shutdown') {
-      shutdown();
-    }
   });
 }
 
@@ -50,10 +56,10 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
     },
     respond(data: any) {
       sentResponse = true;
-      protocol.respond(reqId, JSON.stringify(data ?? null));
+      protocol.respond(reqId, data);
     },
     error(e: Error) {
-      console.error(`${reqId}: `, e);
+      debug(`${reqId}: `, e);
       protocol.error(reqId, e);
     },
   };
@@ -65,7 +71,7 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
       }
     })
     .catch((e) => {
-      console.error('Failed to handle request:');
+      debug('Failed to handle request:');
       context.error(e.message);
     });
 }

@@ -1,10 +1,14 @@
-use std::{
-    error::Error,
-    io::{Read, Write},
-    os::unix::net::UnixStream,
+use std::io::{Read, Write};
+
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::UnixStream,
 };
 
-use crate::messages::{ErrorResponseData, LogResponseData, RunResponseData, RunScriptArgs};
+use crate::{
+    messages::{ErrorResponseData, LogResponseData, RunResponseData, RunScriptArgs},
+    Error,
+};
 
 #[derive(Debug, Clone)]
 pub enum HostToWorkerMessageData {
@@ -18,22 +22,34 @@ impl HostToWorkerMessageData {
         }
     }
 
-    pub fn to_buffer(
+    pub async fn to_buffer(
         &self,
         request_id: u32,
         message_id: u32,
-        mut stream: impl Write,
-    ) -> Result<(), Box<dyn Error>> {
+        mut stream: impl AsyncWrite + Unpin,
+    ) -> Result<(), Error> {
         let data = match self {
             HostToWorkerMessageData::RunScript(d) => serde_json::to_vec(d)?,
         };
 
         let length = 12 + data.len() as u32;
-        stream.write_all(&length.to_le_bytes())?;
-        stream.write_all(&request_id.to_le_bytes())?;
-        stream.write_all(&message_id.to_le_bytes())?;
-        stream.write_all(&self.message_type().to_le_bytes())?;
-        stream.write_all(&data)?;
+        stream
+            .write_all(&length.to_le_bytes())
+            .await
+            .map_err(Error::WriteStream)?;
+        stream
+            .write_all(&request_id.to_le_bytes())
+            .await
+            .map_err(Error::WriteStream)?;
+        stream
+            .write_all(&message_id.to_le_bytes())
+            .await
+            .map_err(Error::WriteStream)?;
+        stream
+            .write_all(&self.message_type().to_le_bytes())
+            .await
+            .map_err(Error::WriteStream)?;
+        stream.write_all(&data).await.map_err(Error::WriteStream)?;
         Ok(())
     }
 }
@@ -54,7 +70,7 @@ impl WorkerToHostMessageData {
         }
     }
 
-    pub fn parse_data(message_type: u32, buffer: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn parse_data(message_type: u32, buffer: &[u8]) -> Result<Self, Error> {
         match message_type {
             0x1000 => Ok(WorkerToHostMessageData::RunResponse(
                 serde_json::from_slice(buffer)?,
@@ -65,11 +81,12 @@ impl WorkerToHostMessageData {
             0x1002 => Ok(WorkerToHostMessageData::Error(serde_json::from_slice(
                 buffer,
             )?)),
-            code => Err(format!("Unknown message type {code}").into()),
+            code => Err(Error::InvalidMessageType(code)),
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HostToWorkerMessage {
     pub request_id: u32,
     pub message_id: u32,
@@ -85,13 +102,15 @@ impl HostToWorkerMessage {
         }
     }
 
-    pub fn write_to(&self, stream: &mut UnixStream) -> Result<(), Box<dyn Error>> {
+    pub async fn write_to(&self, stream: impl AsyncWrite + Unpin) -> Result<(), Error> {
         self.data
-            .to_buffer(self.request_id, self.message_id, stream)?;
+            .to_buffer(self.request_id, self.message_id, stream)
+            .await?;
         Ok(())
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct WorkerToHostMessage {
     pub request_id: u32,
     pub message_id: u32,
@@ -99,9 +118,12 @@ pub struct WorkerToHostMessage {
 }
 
 impl WorkerToHostMessage {
-    pub fn read_from(stream: &mut UnixStream) -> Result<Self, Box<dyn Error>> {
+    pub async fn read_from(mut stream: impl AsyncRead + Unpin) -> Result<Self, Error> {
         let mut header = [0u8; 16];
-        stream.read_exact(&mut header)?;
+        stream
+            .read_exact(&mut header)
+            .await
+            .map_err(Error::ReadStream)?;
 
         let length = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
         let request_id = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
@@ -109,7 +131,10 @@ impl WorkerToHostMessage {
         let message_type = u32::from_le_bytes([header[12], header[13], header[14], header[15]]);
 
         let mut data = vec![0u8; (length - 12) as usize];
-        stream.read_exact(&mut data)?;
+        stream
+            .read_exact(&mut data)
+            .await
+            .map_err(Error::ReadStream)?;
 
         let data = WorkerToHostMessageData::parse_data(message_type, &data)?;
 

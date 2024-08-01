@@ -1,6 +1,6 @@
 import net from 'net';
 import { EventEmitter } from 'events';
-import { HostToWorkerMessage, WorkerToHostMessage } from './api_types.js';
+import { HostToWorkerMessage, WorkerToHostMessage, type RunResponse } from './api_types.js';
 
 export interface IncomingMessage {
   id: number;
@@ -104,7 +104,7 @@ export class Protocol extends EventEmitter<{ message: [IncomingMessage] }> {
     this.sendMessage(reqId, WorkerToHostMessage.Log, data);
   }
 
-  respond(reqId: number, data: unknown) {
+  respond(reqId: number, data: RunResponse) {
     this.sendMessage(reqId, WorkerToHostMessage.RunResponse, JSON.stringify(data));
   }
 

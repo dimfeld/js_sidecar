@@ -4,8 +4,11 @@ import fs from 'fs';
 import { parseArgs } from 'node:util';
 
 import { runWorker } from './worker.js';
+import { debug } from './debug.js';
 
 if (cluster.isPrimary) {
+  const filename = process.argv[1];
+
   // Parse command line arguments
   const { values } = parseArgs({
     options: {
@@ -26,8 +29,6 @@ if (cluster.isPrimary) {
     throw new Error('No socket path provided');
   }
 
-  console.log(`Primary ${process.pid} is running`);
-
   // Clean up the socket file when the process exits in case
   process.on('exit', () => {
     try {
@@ -36,14 +37,25 @@ if (cluster.isPrimary) {
   });
 
   function forkWorker() {
-    cluster.fork({
+    if (shuttingDown) {
+      return;
+    }
+
+    let worker = cluster.fork({
       SOCKET_PATH: socketPath,
+    });
+
+    worker.on('message', (msg) => {
+      if (msg === 'ready' && shuttingDown) {
+        worker.send('shutdown');
+      }
     });
   }
 
   let shuttingDown = false;
 
   const shutdown = () => {
+    debug('shutting down');
     if (shuttingDown) {
       // Double SIGINT means the shutdown is taking longer than the user wants, so just quit now.
       process.exit(1);
@@ -51,28 +63,47 @@ if (cluster.isPrimary) {
 
     shuttingDown = true;
     for (let worker of Object.values(cluster.workers ?? {})) {
-      worker?.send('shutdown');
+      worker?.send('shutdown', () => {});
     }
   };
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
 
-  cluster.on('exit', (worker, code, signal) => {
+  cluster.on('online', (worker) => {
+    debug('online', worker.process.pid, shuttingDown);
     if (shuttingDown) {
-      if (Object.keys(cluster.workers ?? {}).length == 0) {
+      worker.kill('SIGKILL');
+    }
+  });
+
+  cluster.on('exit', (worker, code, signal) => {
+    debug('exit', worker.process.pid, code, signal, shuttingDown, socketPath);
+    if (!shuttingDown && !fs.existsSync(filename)) {
+      debug(`${socketPath} script is gone, shutting down`);
+      shutdown();
+    }
+
+    if (shuttingDown) {
+      const remainingWorkers = Object.values(cluster.workers ?? {}).map((w) => w?.process.pid);
+      debug(socketPath, 'remaining workers:', remainingWorkers);
+      if (remainingWorkers.length == 0) {
         process.exit(0);
       }
       return;
     }
 
     if (signal) {
-      console.error(`Worker ${worker.process.pid} died with signal ${signal}. Restarting...`);
+      debug(`Worker ${worker.process.pid} died with signal ${signal}. Restarting...`);
     } else {
-      console.error(`Worker ${worker.process.pid} died with code ${code}. Restarting...`);
+      debug(`Worker ${worker.process.pid} died with code ${code}. Restarting...`);
     }
     forkWorker();
   });
+
+  debug(
+    `Primary ${process.pid} is running, starting ${numWorkers} workers and connecting to ${socketPath}`
+  );
 
   for (let i = 0; i < numWorkers; i++) {
     forkWorker();
