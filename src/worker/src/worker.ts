@@ -53,8 +53,7 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
     reqId,
     id,
     log(message: any, level: keyof Console = 'info') {
-      // @ts-expect-error More complex type definition for `level` param would fix this
-      console[level](`${reqId}: `, message);
+      debug(`${reqId}[${level}]:`, message);
       protocol.log(reqId, level, message);
     },
     respond(data: any) {
@@ -62,7 +61,7 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
       protocol.respond(reqId, data);
     },
     error(e: Error) {
-      debug(`${reqId}: `, e);
+      debug(`${reqId}: `, e.message);
       protocol.error(reqId, e);
     },
   };
@@ -75,7 +74,7 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
     })
     .catch((e) => {
       debug('Failed to handle request:');
-      context.error(e.message);
+      context.error(e);
     });
 }
 

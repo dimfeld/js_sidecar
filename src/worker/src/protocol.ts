@@ -108,11 +108,8 @@ export class Protocol extends EventEmitter<{ message: [IncomingMessage] }> {
     this.sendMessage(reqId, WorkerToHostMessage.RunResponse, JSON.stringify(data));
   }
 
-  error(reqId: number, e: object) {
-    let message = e;
-    if (message instanceof Error) {
-      message = { message: message.message, stack: message.stack };
-    }
+  error(reqId: number, e: Error) {
+    let message = { message: e.message, stack: e.stack };
 
     let data = JSON.stringify(message);
     this.sendMessage(reqId, WorkerToHostMessage.Error, data);
