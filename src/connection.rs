@@ -21,6 +21,14 @@ const SCRIPT: &str = include_str!("./worker/dist/index.js");
 /// To ensure unique sockets per instance
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone)]
+pub struct RunScriptAndWaitResult {
+    /// The result of running the script
+    pub response: RunResponseData,
+    /// Other messages that arrived in the meantime, such as console logs.
+    pub messages: Vec<WorkerToHostMessageData>,
+}
+
 pub struct JsSidecar {
     node_process: Option<Child>,
     socket_path: PathBuf,
@@ -220,12 +228,6 @@ impl Connection {
 
         Err(Error::ScriptEndedEarly)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct RunScriptAndWaitResult {
-    pub response: RunResponseData,
-    pub messages: Vec<WorkerToHostMessageData>,
 }
 
 #[cfg(test)]
