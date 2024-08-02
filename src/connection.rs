@@ -39,7 +39,9 @@ pub struct JsSidecar {
 
 impl JsSidecar {
     /// Start Node.js and set up the socket.
-    pub async fn new() -> Result<Self, Error> {
+    /// `num_workers` is the number of worker processes to start, and will use the number of CPUs
+    /// on the system if omitted.
+    pub async fn new(num_workers: Option<u32>) -> Result<Self, Error> {
         let pid = std::process::id();
         let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temp_dir = std::env::temp_dir();
@@ -57,16 +59,22 @@ impl JsSidecar {
             .await
             .map_err(Error::StartWorker)?;
 
-        let node_process = Command::new("node")
+        let mut command = Command::new("node");
+
+        command
             // Silence warning for experimental-vm-modules
             .arg("--no-warnings=ExperimentalWarning")
             // Enable ES Module functionality in vm package
             .arg("--experimental-vm-modules")
             .arg(script_path)
             .arg("--socket")
-            .arg(&socket_path)
-            .spawn()
-            .map_err(Error::StartWorker)?;
+            .arg(&socket_path);
+
+        if let Some(num_workers) = num_workers {
+            command.arg("--workers").arg(num_workers.to_string());
+        }
+
+        let node_process = command.spawn().map_err(Error::StartWorker)?;
 
         let mut checks = 0;
 
@@ -256,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn regular_execution() {
-        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
         let mut connection = sidecar.connect().await.unwrap();
 
         let args = RunScriptArgs {
@@ -306,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn expression_execution() {
-        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut sidecar = JsSidecar::new(None).await.unwrap();
         let mut connection = sidecar.connect().await.unwrap();
 
         let args = RunScriptArgs {
@@ -348,7 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_script_and_wait() {
-        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
         let mut connection = sidecar.connect().await.unwrap();
 
         let args = RunScriptArgs {
@@ -375,7 +383,7 @@ mod tests {
 
     #[tokio::test]
     async fn error() {
-        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
         let mut connection = sidecar.connect().await.unwrap();
 
         let args = RunScriptArgs {
