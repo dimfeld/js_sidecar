@@ -58,6 +58,8 @@ impl JsSidecar {
             .map_err(Error::StartWorker)?;
 
         let node_process = Command::new("node")
+            // Silence warning for experimental-vm-modules
+            .arg("--no-warnings=ExperimentalWarning")
             // Enable ES Module functionality in vm package
             .arg("--experimental-vm-modules")
             .arg(script_path)
