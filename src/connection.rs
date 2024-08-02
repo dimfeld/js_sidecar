@@ -1,17 +1,19 @@
-use std::{ffi::OsStr, io, path::PathBuf, process::Stdio, sync::atomic::AtomicU64, time::Duration};
+use std::{io, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
 
 use tempfile::NamedTempFile;
 use tokio::{
-    io::AsyncWriteExt,
     net::{unix::OwnedWriteHalf, UnixStream},
     process::{Child, Command},
     sync::mpsc,
 };
 
 use crate::{
+    error::RunScriptError,
     messages::RunScriptArgs,
-    protocol::{HostToWorkerMessage, HostToWorkerMessageData, WorkerToHostMessage},
-    Error,
+    protocol::{
+        HostToWorkerMessage, HostToWorkerMessageData, WorkerToHostMessage, WorkerToHostMessageData,
+    },
+    Error, RunResponseData,
 };
 
 const SCRIPT: &str = include_str!("./worker/dist/index.js");
@@ -134,6 +136,8 @@ impl Drop for JsSidecar {
 pub struct Connection {
     stream: OwnedWriteHalf,
     receiver: mpsc::Receiver<WorkerToHostMessage>,
+    next_id: u32,
+    next_req_id: u32,
 }
 
 impl std::fmt::Debug for Connection {
@@ -166,11 +170,18 @@ impl Connection {
         Ok(Connection {
             stream: write_stream,
             receiver,
+            next_id: 0,
+            next_req_id: 0,
         })
     }
 
     pub async fn run_script(&mut self, args: RunScriptArgs) -> Result<(), Error> {
-        let message = HostToWorkerMessage::new(0, 0, HostToWorkerMessageData::RunScript(args));
+        let message_id = self.next_id;
+        let req_id = self.next_req_id;
+        self.next_req_id += 1;
+        self.next_id += 1;
+        let message =
+            HostToWorkerMessage::new(req_id, message_id, HostToWorkerMessageData::RunScript(args));
         message.write_to(&mut self.stream).await?;
         Ok(())
     }
@@ -178,6 +189,43 @@ impl Connection {
     pub async fn receive_message(&mut self) -> Option<WorkerToHostMessage> {
         self.receiver.recv().await
     }
+
+    pub async fn run_script_and_wait(
+        &mut self,
+        args: RunScriptArgs,
+    ) -> Result<RunScriptAndWaitResult, Error> {
+        self.run_script(args).await?;
+
+        let mut intermediate_messages = Vec::new();
+
+        while let Some(message) = self.receive_message().await {
+            match message.data {
+                WorkerToHostMessageData::RunResponse(response) => {
+                    return Ok(RunScriptAndWaitResult {
+                        response,
+                        messages: intermediate_messages,
+                    });
+                }
+                WorkerToHostMessageData::Error(error) => {
+                    return Err(Error::Script(RunScriptError {
+                        error,
+                        messages: intermediate_messages,
+                    }));
+                }
+                _ => {
+                    intermediate_messages.push(message.data);
+                }
+            }
+        }
+
+        Err(Error::ScriptEndedEarly)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RunScriptAndWaitResult {
+    pub response: RunResponseData,
+    pub messages: Vec<WorkerToHostMessageData>,
 }
 
 #[cfg(test)]
@@ -279,6 +327,57 @@ mod tests {
         };
 
         assert_eq!(response.return_value, Some(json!(20)));
+
+        drop(connection);
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn run_script_and_wait() {
+        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut connection = sidecar.connect().await.unwrap();
+
+        let args = RunScriptArgs {
+            code: r##"
+                console.log('abc');
+                output = 15
+            "##
+            .into(),
+            globals: [("output".into(), json!(5))].into_iter().collect(),
+            ..Default::default()
+        };
+        let result = connection.run_script_and_wait(args).await.unwrap();
+
+        assert_eq!(result.response.globals["output"], json!(15));
+        assert_eq!(result.messages.len(), 1);
+        assert!(matches!(
+            result.messages[0],
+            WorkerToHostMessageData::Log(_)
+        ));
+
+        drop(connection);
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn error() {
+        let mut sidecar = JsSidecar::new().await.unwrap();
+        let mut connection = sidecar.connect().await.unwrap();
+
+        let args = RunScriptArgs {
+            code: r##"
+                throw new Error('This is an error');
+            "##
+            .into(),
+            ..Default::default()
+        };
+        let result = connection.run_script_and_wait(args).await.unwrap_err();
+
+        let Error::Script(err) = result else {
+            panic!("Expected Script error, saw {result:#?}");
+        };
+
+        assert_eq!(err.error.message, "This is an error");
 
         drop(connection);
         sidecar.close().await;

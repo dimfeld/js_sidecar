@@ -1,9 +1,4 @@
-use std::io::{Read, Write};
-
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::UnixStream,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
     messages::{ErrorResponseData, LogResponseData, RunResponseData, RunScriptArgs},
