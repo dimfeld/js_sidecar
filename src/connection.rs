@@ -21,6 +21,7 @@ const SCRIPT: &str = include_str!("./worker/dist/index.js");
 /// To ensure unique sockets per instance
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// The result of running a script
 #[derive(Debug, Clone)]
 pub struct RunScriptAndWaitResult {
     /// The result of running the script
@@ -29,6 +30,7 @@ pub struct RunScriptAndWaitResult {
     pub messages: Vec<WorkerToHostMessageData>,
 }
 
+/// JsSidecar starts the Node.js process and allows connecting to its socket.
 pub struct JsSidecar {
     node_process: Option<Child>,
     socket_path: PathBuf,
@@ -36,6 +38,7 @@ pub struct JsSidecar {
 }
 
 impl JsSidecar {
+    /// Start Node.js and set up the socket.
     pub async fn new() -> Result<Self, Error> {
         let pid = std::process::id();
         let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -104,6 +107,7 @@ impl JsSidecar {
         Connection::new(stream)
     }
 
+    /// Close Node.js
     pub async fn close(&mut self) {
         if let Some(child) = self.node_process.take() {
             Self::close_child(child).await;
@@ -141,9 +145,12 @@ impl Drop for JsSidecar {
     }
 }
 
+/// A connection to Node.js. Multiple calls on a connection will reuse the execution context,
+/// unless expicitly specified otherwise using the [recreate_context] argument.
 pub struct Connection {
     stream: OwnedWriteHalf,
-    receiver: mpsc::Receiver<WorkerToHostMessage>,
+    /// The receiver for messages from the Node.js process.
+    pub receiver: mpsc::Receiver<WorkerToHostMessage>,
     next_id: u32,
     next_req_id: u32,
 }
@@ -183,6 +190,7 @@ impl Connection {
         })
     }
 
+    /// Start running a script
     pub async fn run_script(&mut self, args: RunScriptArgs) -> Result<(), Error> {
         let message_id = self.next_id;
         let req_id = self.next_req_id;
@@ -194,10 +202,12 @@ impl Connection {
         Ok(())
     }
 
+    /// Receive a message from the Node.js process
     pub async fn receive_message(&mut self) -> Option<WorkerToHostMessage> {
         self.receiver.recv().await
     }
 
+    /// Run a script and wait for it to finish, accumulating console messages seen along the way.
     pub async fn run_script_and_wait(
         &mut self,
         args: RunScriptArgs,
