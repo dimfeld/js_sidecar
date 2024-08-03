@@ -2,6 +2,16 @@ import * as vm from 'vm';
 import type { MessageContext } from './types.js';
 import type { RunResponse, RunScriptArgs } from './api_types.js';
 import { debug } from './debug.js';
+import { LRUCache } from 'lru-cache';
+
+const codeCache = new LRUCache<string, Buffer>({
+  max: 128,
+});
+
+function codeCacheKey(esm: boolean, code: string, params?: string[]) {
+  const startKey = esm ? 'esm' : 'cjs';
+  return [startKey, code, ...(params || [])].join('\0');
+}
 
 const RUN_CTX_KEY = Symbol('runCtx');
 
@@ -40,16 +50,32 @@ function createContext(ctx: MessageContext, args: RunScriptArgs): RunContext {
   }
 
   for (const fn of args.functions ?? []) {
-    runCtx.context[fn.name] = vm.compileFunction(fn.code, fn.params, {
+    let cacheKey = codeCacheKey(false, fn.code, fn.params);
+    let cachedData = codeCache.get(cacheKey);
+    let compiled = vm.compileFunction(fn.code, fn.params, {
       parsingContext: runCtx.context,
+      cachedData,
+      produceCachedData: !cachedData,
     });
+
+    runCtx.context[fn.name] = compiled;
   }
 
   for (const modArgs of args.modules ?? []) {
-    runCtx.modules[modArgs.name] = new vm.SourceTextModule(modArgs.code, {
+    const cacheKey = codeCacheKey(true, modArgs.code);
+    let cachedData = codeCache.get(cacheKey);
+    let mod = new vm.SourceTextModule(modArgs.code, {
       identifier: modArgs.name,
       context: runCtx.context,
+      cachedData,
     });
+
+    if (!cachedData) {
+      let data = mod.createCachedData();
+      codeCache.set(cacheKey, data);
+    }
+
+    runCtx.modules[modArgs.name] = mod;
   }
 
   return runCtx;
@@ -66,9 +92,19 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
     return {};
   }
 
+  const cacheKey = codeCacheKey(!args.expr, args.code);
   if (args.expr) {
-    retVal = vm.runInContext(args.code, run.context, {
+    let cacheData = codeCache.get(cacheKey);
+    let script = new vm.Script(args.code, {
       filename: args.name || '<script>',
+      cachedData: cacheData,
+    });
+
+    if (!cacheData) {
+      codeCache.set(cacheKey, script.createCachedData());
+    }
+
+    retVal = script.runInContext(run.context, {
       timeout: args.timeoutMs ?? undefined,
     });
 
@@ -87,10 +123,20 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
       );
     }
 
+    let cachedData = codeCache.get(cacheKey);
     let mod = new vm.SourceTextModule(args.code, {
       identifier: args.name || '<script>',
       context: run.context,
+      cachedData,
     });
+
+    if (!cachedData) {
+      let data = mod.createCachedData();
+      if (data) {
+        codeCache.set(cacheKey, data);
+      }
+    }
+
     await mod.link(doLink);
     await mod.evaluate();
   }

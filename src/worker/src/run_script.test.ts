@@ -179,7 +179,6 @@ describe('runScript', () => {
       expr: false,
       globals: {},
     };
-
     await expect(runScript(args, createMessageContext())).rejects.toThrow('Test error');
   });
 

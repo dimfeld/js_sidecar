@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      lru-cache:
-        specifier: ^11.0.0
-        version: 11.0.0
     devDependencies:
       '@types/eslint':
         specifier: 8.56.0
@@ -30,9 +26,15 @@ importers:
       eslint-config-prettier:
         specifier: ^9.1.0
         version: 9.1.0(eslint@8.57.0)
+      lru-cache:
+        specifier: ^11.0.0
+        version: 11.0.0
       rollup:
         specifier: ^4.19.1
         version: 4.19.1
+      rollup-plugin-node-externals:
+        specifier: ^7.1.2
+        version: 7.1.2(rollup@4.19.1)
       tslib:
         specifier: ^2.6.2
         version: 2.6.3
@@ -861,6 +863,12 @@ packages:
     resolution: {integrity: sha512-JZkJMZkAGFFPP2YqXZXPbMlMBgsxzE8ILs4lMIX/2o0L9UBw9O/Y3o6wFw/i9YLapcUJWwqbi3kdxIPdC62TIA==}
     deprecated: Rimraf versions prior to v4 are no longer supported
     hasBin: true
+
+  rollup-plugin-node-externals@7.1.2:
+    resolution: {integrity: sha512-cVJFKs+ulZxpMmn/s+oi431d93Jq5+G7Sc5ixWDrL2k+Gj+MqXg0KMNWgKf8Mw5qpaG4jVDpsvuqFfiCvRcGeA==}
+    engines: {node: '>= 21 || ^20.6.0 || ^18.19.0'}
+    peerDependencies:
+      rollup: ^3.0.0 || ^4.0.0
 
   rollup@4.19.1:
     resolution: {integrity: sha512-K5vziVlg7hTpYfFBI+91zHBEMo6jafYXpkMlqZjg7/zhIG9iHqazBf4xz9AVdjS9BruRn280ROqLI7G3OFRIlw==}
@@ -1815,6 +1823,10 @@ snapshots:
   rimraf@3.0.2:
     dependencies:
       glob: 7.2.3
+
+  rollup-plugin-node-externals@7.1.2(rollup@4.19.1):
+    dependencies:
+      rollup: 4.19.1
 
   rollup@4.19.1:
     dependencies:

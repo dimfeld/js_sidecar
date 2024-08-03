@@ -11,7 +11,7 @@
 //!
 //! In [my experience in the past](https://github.com/dimfeld/ergo/tree/master/js) this worked out ok, but you have to set up a lot of runtime stuff yourself.
 //! Updating all the Deno crates together was also a pain and there were often breaking changes to be handled.
-//! Some of this might be better now as Deno itself has matured, but overall it seemed that embedding a "full-featured Deno" is not really as easy as it should be.
+//! Some of this might be better now as Deno itself has matured, but overall it seemed that embedding a "full-featured Deno" is not really as easy as it could be.
 //!
 //! ### QuickJS/Boa/etc
 //!

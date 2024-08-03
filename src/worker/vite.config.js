@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
+import nodeExternals from 'rollup-plugin-node-externals';
 
 const production = process.env.NODE_ENV === 'production';
-
 
 export default defineConfig({
   build: {
@@ -10,7 +10,11 @@ export default defineConfig({
     sourcemap: true,
     minify: production,
     rollupOptions: {
-      input: "src/index.ts"
-    }
+      input: 'src/index.ts',
+    },
+  },
+  plugins: [nodeExternals()],
+  ssr: {
+    noExternal: ['lru-cache'],
   },
 });
