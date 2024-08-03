@@ -1,6 +1,7 @@
 import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import { HostToWorkerMessage, WorkerToHostMessage, type RunResponse } from './api_types.js';
+import { debug } from './debug.js';
 
 export interface IncomingMessage {
   id: number;
@@ -84,16 +85,17 @@ export class Protocol extends EventEmitter<{ message: [IncomingMessage] }> {
   }
 
   sendMessage(reqId: number, type: WorkerToHostMessage, message: string | Buffer) {
+    debug('Sending message', reqId, type, message);
+    if (!(message instanceof Buffer)) {
+      message = Buffer.from(message);
+    }
+
     let id = this.id++;
     const header = Buffer.allocUnsafe(MSG_HEADER_LENGTH + 4);
     header.writeUInt32LE(message.length + MSG_HEADER_LENGTH);
     header.writeUInt32LE(reqId, REQ_ID_OFFSET + 4);
     header.writeUInt32LE(id, MSG_ID_OFFSET + 4);
     header.writeUInt32LE(type, MSG_TYPE_OFFSET + 4);
-
-    if (!(message instanceof Buffer)) {
-      message = Buffer.from(message);
-    }
 
     this.socket.write(Buffer.concat([header, message]));
     return id;

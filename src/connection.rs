@@ -1,7 +1,15 @@
-use std::{io, path::PathBuf, sync::atomic::AtomicU64, time::Duration};
+use std::{
+    io,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    time::Duration,
+};
 
+use deadpool::managed::{Metrics, Pool};
+use futures::stream::{self, StreamExt};
 use tempfile::NamedTempFile;
 use tokio::{
+    io::AsyncWriteExt,
     net::{unix::OwnedWriteHalf, UnixStream},
     process::{Child, Command},
     sync::mpsc,
@@ -35,6 +43,7 @@ pub struct JsSidecar {
     node_process: Option<Child>,
     socket_path: PathBuf,
     _script_file: NamedTempFile,
+    pool: Pool<ConnectionManager>,
 }
 
 impl JsSidecar {
@@ -79,11 +88,6 @@ impl JsSidecar {
         let mut checks = 0;
 
         while checks < 50 {
-            // Wait for the socket to appear
-            // TODO This should really have a better interlock
-            if std::fs::metadata(&socket_path).is_ok() {
-                break;
-            }
             // Wait until the socket exists and can be connected
             let stream = UnixStream::connect(&socket_path).await;
             if stream.is_ok() {
@@ -100,8 +104,18 @@ impl JsSidecar {
             )));
         }
 
+        let pool = Pool::builder(ConnectionManager {
+            socket_path: socket_path.clone(),
+            recycle_calls: AtomicUsize::new(0),
+            recycle_success: AtomicUsize::new(0),
+        })
+        .max_size(1024)
+        .build()
+        .map_err(Error::BuildPool)?;
+
         Ok(JsSidecar {
             node_process: Some(node_process),
+            pool,
             socket_path,
             // Make sure we keep the script file alive as long as the sidecar is alive.
             _script_file: input_script,
@@ -109,16 +123,13 @@ impl JsSidecar {
     }
 
     /// Create a new connection with its own run context.
-    pub async fn connect(&self) -> Result<Connection, Error> {
-        // TODO add retries here
-        let stream = UnixStream::connect(&self.socket_path)
-            .await
-            .map_err(Error::ConnectWorker)?;
-        Connection::new(stream)
+    pub async fn connect(&self) -> Result<PoolConnection, Error> {
+        self.pool.get().await.map_err(|e| Error::Pool(Box::new(e)))
     }
 
     /// Close Node.js
     pub async fn close(&mut self) {
+        self.pool.close();
         if let Some(child) = self.node_process.take() {
             Self::close_child(child).await;
         }
@@ -155,14 +166,64 @@ impl Drop for JsSidecar {
     }
 }
 
+/// deadpool Manager for Sidecar connections
+pub struct ConnectionManager {
+    socket_path: PathBuf,
+    recycle_calls: AtomicUsize,
+    recycle_success: AtomicUsize,
+}
+
+impl deadpool::managed::Manager for ConnectionManager {
+    type Type = Connection;
+    type Error = Error;
+
+    async fn create(&self) -> Result<Self::Type, Self::Error> {
+        let stream = UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(Error::ConnectWorker)?;
+        Connection::new(stream)
+    }
+
+    async fn recycle(
+        &self,
+        conn: &mut Self::Type,
+        _metrics: &Metrics,
+    ) -> deadpool::managed::RecycleResult<Error> {
+        self.recycle_calls.fetch_add(1, Ordering::Relaxed);
+        conn.ping().await?;
+        let msg = tokio::time::timeout(Duration::from_secs(1), conn.receive_message())
+            .await
+            .map_err(|_| Error::Timeout)?
+            .ok_or(Error::ReadStream(io::Error::other("Worker is closed")))?;
+
+        if !matches!(msg.data, WorkerToHostMessageData::Pong) {
+            // if the message is anything other than a Pong, then we're out of sync somehow.
+            return Err(deadpool::managed::RecycleError::Backend(
+                Error::ConnectionOutOfSync,
+            ));
+        }
+
+        conn.reset_context_on_next = true;
+
+        self.recycle_success.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+/// A connection obtained from the connectiion pool inside the [JsSidecar].
+pub type PoolConnection = deadpool::managed::Object<ConnectionManager>;
+
 /// A connection to Node.js. Multiple calls on a connection will reuse the execution context,
-/// unless expicitly specified otherwise using the [recreate_context] argument.
+/// unless explicitly specified otherwise using the [recreate_context] argument.
 pub struct Connection {
     stream: OwnedWriteHalf,
     /// The receiver for messages from the Node.js process.
     pub receiver: mpsc::Receiver<WorkerToHostMessage>,
     next_id: u32,
     next_req_id: u32,
+    _task_close_tx: tokio::sync::oneshot::Sender<()>,
+
+    reset_context_on_next: bool,
 }
 
 impl std::fmt::Debug for Connection {
@@ -176,18 +237,30 @@ impl Connection {
         let (sender, receiver) = mpsc::channel(16);
         let (mut read_stream, write_stream) = stream.into_split();
 
+        let (close_tx, close_rx) = tokio::sync::oneshot::channel::<()>();
+
         tokio::task::spawn(async move {
+            tokio::pin!(close_rx);
             loop {
-                match WorkerToHostMessage::read_from(&mut read_stream).await {
-                    Ok(message) => {
-                        if sender.send(message).await.is_err() {
-                            break;
+                tokio::select! {
+                    message = WorkerToHostMessage::read_from(&mut read_stream) => {
+                        match message {
+                            Ok(message) => {
+                                if sender.send(message).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_e) => {
+                                // eprintln!("Failed to read message from worker: {e:?}");
+                                break;
+                            }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Failed to read message from worker: {e:?}");
+
+                    _ = &mut close_rx  => {
                         break;
                     }
+
                 }
             }
         });
@@ -197,11 +270,18 @@ impl Connection {
             receiver,
             next_id: 0,
             next_req_id: 0,
+            reset_context_on_next: false,
+            _task_close_tx: close_tx,
         })
     }
 
     /// Start running a script
-    pub async fn run_script(&mut self, args: RunScriptArgs) -> Result<(), Error> {
+    pub async fn run_script(&mut self, mut args: RunScriptArgs) -> Result<(), Error> {
+        if self.reset_context_on_next {
+            self.reset_context_on_next = false;
+            args.recreate_context = true;
+        }
+
         let message_id = self.next_id;
         let req_id = self.next_req_id;
         self.next_req_id += 1;
@@ -215,6 +295,16 @@ impl Connection {
     /// Receive a message from the Node.js process
     pub async fn receive_message(&mut self) -> Option<WorkerToHostMessage> {
         self.receiver.recv().await
+    }
+
+    async fn ping(&mut self) -> Result<(), Error> {
+        let message_id = self.next_id;
+        let req_id = self.next_req_id;
+        self.next_req_id += 1;
+        self.next_id += 1;
+        let message = HostToWorkerMessage::new(req_id, message_id, HostToWorkerMessageData::Ping);
+        message.write_to(&mut self.stream).await?;
+        Ok(())
     }
 
     /// Run a script and wait for it to finish, accumulating console messages seen along the way.
@@ -309,6 +399,7 @@ mod tests {
         };
 
         assert_eq!(response.globals["output"], json!(20));
+        eprintln!("Closing");
         sidecar.close().await;
     }
 
@@ -331,6 +422,10 @@ mod tests {
         let mut messages = Vec::new();
 
         while let Some(message) = connection.receive_message().await {
+            if matches!(&message.data, WorkerToHostMessageData::Error(_)) {
+                panic!("Saw error: {message:#?}");
+            }
+
             let finished = matches!(message.data, WorkerToHostMessageData::RunResponse(_));
             println!("{message:#?}");
             messages.push(message);
@@ -402,6 +497,119 @@ mod tests {
         assert_eq!(err.error.message, "This is an error");
 
         drop(connection);
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn syntax_error() {
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
+        let mut connection = sidecar.connect().await.unwrap();
+
+        let args = RunScriptArgs {
+            code: r##"
+                23jklsdfhio
+            "##
+            .into(),
+            ..Default::default()
+        };
+        let result = connection.run_script_and_wait(args).await.unwrap_err();
+
+        let Error::Script(err) = result else {
+            panic!("Expected Script error, saw {result:#?}");
+        };
+
+        assert_eq!(err.error.message, "Invalid or unexpected token");
+
+        drop(connection);
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn multiple_connections() {
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
+
+        let connections = (0..8)
+            .map(|_| async {
+                let mut connection = sidecar.connect().await.unwrap();
+                let args = RunScriptArgs {
+                    code: r##"
+                console.log('abc');
+                output = 15
+            "##
+                    .into(),
+                    globals: [("output".into(), json!(5))].into_iter().collect(),
+                    ..Default::default()
+                };
+                let result = connection.run_script_and_wait(args).await.unwrap();
+
+                assert_eq!(result.response.globals["output"], json!(15));
+                assert_eq!(result.messages.len(), 1);
+                assert!(matches!(
+                    result.messages[0],
+                    WorkerToHostMessageData::Log(_)
+                ));
+            })
+            .collect::<Vec<_>>();
+
+        futures::future::join_all(connections).await;
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn multiple_connections_and_workers() {
+        let mut sidecar = JsSidecar::new(Some(4)).await.unwrap();
+
+        let connections = (0..8)
+            .map(|_| async {
+                let mut connection = sidecar.connect().await.unwrap();
+                let args = RunScriptArgs {
+                    code: r##"
+                console.log('abc');
+                output = 15
+            "##
+                    .into(),
+                    globals: [("output".into(), json!(5))].into_iter().collect(),
+                    ..Default::default()
+                };
+                let result = connection.run_script_and_wait(args).await.unwrap();
+
+                assert_eq!(result.response.globals["output"], json!(15));
+                assert_eq!(result.messages.len(), 1);
+                assert!(matches!(
+                    result.messages[0],
+                    WorkerToHostMessageData::Log(_)
+                ));
+            })
+            .collect::<Vec<_>>();
+
+        futures::future::join_all(connections).await;
+        sidecar.close().await;
+    }
+
+    #[tokio::test]
+    async fn many_connections() {
+        let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
+
+        stream::iter(0..10000)
+            .for_each_concurrent(None, |_| async {
+                let mut connection = sidecar.connect().await.unwrap();
+                let args = RunScriptArgs {
+                    code: r##"
+                        2 + 2
+                "##
+                    .into(),
+                    expr: true,
+                    ..Default::default()
+                };
+
+                connection.run_script_and_wait(args).await.unwrap();
+            })
+            .await;
+        let manager = sidecar.pool.manager();
+
+        let calls = manager.recycle_calls.load(Ordering::Relaxed);
+        let success = manager.recycle_success.load(Ordering::Relaxed);
+        assert_eq!(success, calls);
         sidecar.close().await;
     }
 }

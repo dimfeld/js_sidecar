@@ -9,6 +9,9 @@ homepage = "https://github.com/dimfeld/js_sidecar"
 documentation = "https://docs.rs/js_sidecar"
 
 [dependencies]
+byteorder = "1.5.0"
+deadpool = "0.12.1"
+futures = "0.3.30"
 nix = { version = "0.29.0", features = ["signal"] }
 serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.121"
@@ -18,4 +21,9 @@ tokio = { version = "1.36.0", features = ["io-util", "fs", "net", "process", "rt
 tracing = "0.1.40"
 
 [dev-dependencies]
-tokio = { version = "1.36.0", features = ["io-util", "macros", "net", "process", "rt", "sync", "test-util"] }
+criterion = { version = "0.5.1", features = ["async_tokio", "tokio"] }
+tokio = { version = "1.36.0", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "test-util"] }
+
+[[bench]]
+name = "bench"
+harness = false

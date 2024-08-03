@@ -24,6 +24,7 @@ pub struct CodeModule {
 
 /// Data associated with the RunScript message
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunScriptArgs {
     pub name: Cow<'static, str>,
 
@@ -41,6 +42,7 @@ pub struct RunScriptArgs {
     pub globals: HashMap<Cow<'static, str>, serde_json::Value>,
 
     /// How long to wait for the script to complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
 
     /// Functions to compile and place in the global scope

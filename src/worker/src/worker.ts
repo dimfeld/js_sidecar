@@ -3,7 +3,7 @@ import cluster from 'node:cluster';
 import { Protocol, type IncomingMessage } from './protocol.js';
 import type { MessageContext } from './types.js';
 import { runScript } from './run_script.js';
-import { HostToWorkerMessage } from './api_types.js';
+import { HostToWorkerMessage, WorkerToHostMessage } from './api_types.js';
 import { debug } from './debug.js';
 
 export function runWorker(socketPath: string) {
@@ -36,7 +36,7 @@ export function runWorker(socketPath: string) {
   }
 
   server.on('error', (e) => {
-    debug(e);
+    console.error(e);
     process.exit(1);
   });
 
@@ -47,6 +47,11 @@ export function runWorker(socketPath: string) {
 }
 
 function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: IncomingMessage) {
+  if (type === HostToWorkerMessage.Ping) {
+    protocol.sendMessage(reqId, WorkerToHostMessage.Pong, Buffer.alloc(0));
+    return;
+  }
+
   let sentResponse = false;
   const context: MessageContext = {
     protocol,

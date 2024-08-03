@@ -67,7 +67,7 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
   if (args.expr) {
     retVal = vm.runInContext(args.code, run.context, {
       filename: args.name,
-      timeout: args.timeoutMs,
+      timeout: args.timeoutMs ?? undefined,
     });
 
     if (typeof retVal?.then === 'function') {

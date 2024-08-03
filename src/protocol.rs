@@ -1,4 +1,5 @@
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use byteorder::{LittleEndian, WriteBytesExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use crate::{
     messages::{ErrorResponseData, LogResponseData, RunResponseData, RunScriptArgs},
@@ -8,12 +9,14 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum HostToWorkerMessageData {
     RunScript(RunScriptArgs),
+    Ping,
 }
 
 impl HostToWorkerMessageData {
     pub fn message_type(&self) -> u32 {
         match self {
             HostToWorkerMessageData::RunScript(_) => 0,
+            HostToWorkerMessageData::Ping => 1,
         }
     }
 
@@ -23,28 +26,27 @@ impl HostToWorkerMessageData {
         message_id: u32,
         mut stream: impl AsyncWrite + Unpin,
     ) -> Result<(), Error> {
-        let data = match self {
+        let message_data = match self {
             HostToWorkerMessageData::RunScript(d) => serde_json::to_vec(d)?,
+            HostToWorkerMessageData::Ping => Vec::new(),
         };
 
-        let length = 12 + data.len() as u32;
-        stream
-            .write_all(&length.to_le_bytes())
-            .await
+        let mut data = Vec::with_capacity(16 + message_data.len());
+        data.write_u32::<LittleEndian>((message_data.len() + 12) as u32)
             .map_err(Error::WriteStream)?;
-        stream
-            .write_all(&request_id.to_le_bytes())
-            .await
+        data.write_u32::<LittleEndian>(request_id)
             .map_err(Error::WriteStream)?;
-        stream
-            .write_all(&message_id.to_le_bytes())
-            .await
+        data.write_u32::<LittleEndian>(message_id)
             .map_err(Error::WriteStream)?;
-        stream
-            .write_all(&self.message_type().to_le_bytes())
-            .await
+        data.write_u32::<LittleEndian>(self.message_type())
             .map_err(Error::WriteStream)?;
-        stream.write_all(&data).await.map_err(Error::WriteStream)?;
+
+        data.extend_from_slice(&message_data);
+
+        {
+            use tokio::io::AsyncWriteExt;
+            stream.write_all(&data).await.map_err(Error::WriteStream)?;
+        }
         Ok(())
     }
 }
@@ -54,6 +56,7 @@ pub enum WorkerToHostMessageData {
     RunResponse(RunResponseData),
     Log(LogResponseData),
     Error(ErrorResponseData),
+    Pong,
 }
 
 impl WorkerToHostMessageData {
@@ -62,6 +65,7 @@ impl WorkerToHostMessageData {
             WorkerToHostMessageData::RunResponse(_) => 0x1000,
             WorkerToHostMessageData::Log(_) => 0x1001,
             WorkerToHostMessageData::Error(_) => 0x1002,
+            WorkerToHostMessageData::Pong => 0x1003,
         }
     }
 
@@ -76,6 +80,7 @@ impl WorkerToHostMessageData {
             0x1002 => Ok(WorkerToHostMessageData::Error(serde_json::from_slice(
                 buffer,
             )?)),
+            0x1003 => Ok(WorkerToHostMessageData::Pong),
             code => Err(Error::InvalidMessageType(code)),
         }
     }

@@ -5,6 +5,8 @@
 export enum HostToWorkerMessage {
   /** Run a script, optionally supplying globals and code modules. */
   RunScript = 0,
+  /** Host checking connection integrity */
+  Ping = 1,
 }
 
 // Worker-to-host
@@ -12,6 +14,7 @@ export enum WorkerToHostMessage {
   RunResponse = 0x1000,
   Log = 0x1001,
   Error = 0x1002,
+  Pong = 0x1003,
 }
 
 /** A function to be injected into the context. */
