@@ -110,6 +110,7 @@ impl JsSidecar {
             recycle_success: AtomicUsize::new(0),
         })
         .max_size(1024)
+        .queue_mode(deadpool::managed::QueueMode::Lifo)
         .build()
         .map_err(Error::BuildPool)?;
 
@@ -190,20 +191,20 @@ impl deadpool::managed::Manager for ConnectionManager {
         _metrics: &Metrics,
     ) -> deadpool::managed::RecycleResult<Error> {
         self.recycle_calls.fetch_add(1, Ordering::Relaxed);
-        conn.ping().await?;
+        let req_id = conn.ping().await?;
         let msg = tokio::time::timeout(Duration::from_secs(1), conn.receive_message())
             .await
             .map_err(|_| Error::Timeout)?
             .ok_or(Error::ReadStream(io::Error::other("Worker is closed")))?;
 
-        if !matches!(msg.data, WorkerToHostMessageData::Pong) {
+        if msg.request_id != req_id || !matches!(msg.data, WorkerToHostMessageData::Pong) {
             // if the message is anything other than a Pong, then we're out of sync somehow.
             return Err(deadpool::managed::RecycleError::Backend(
                 Error::ConnectionOutOfSync,
             ));
         }
 
-        conn.reset_context_on_next = true;
+        conn.recreate_context_on_next = true;
 
         self.recycle_success.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -223,7 +224,7 @@ pub struct Connection {
     next_req_id: u32,
     _task_close_tx: tokio::sync::oneshot::Sender<()>,
 
-    reset_context_on_next: bool,
+    recreate_context_on_next: bool,
 }
 
 impl std::fmt::Debug for Connection {
@@ -270,15 +271,15 @@ impl Connection {
             receiver,
             next_id: 0,
             next_req_id: 0,
-            reset_context_on_next: false,
+            recreate_context_on_next: false,
             _task_close_tx: close_tx,
         })
     }
 
     /// Start running a script
     pub async fn run_script(&mut self, mut args: RunScriptArgs) -> Result<(), Error> {
-        if self.reset_context_on_next {
-            self.reset_context_on_next = false;
+        if self.recreate_context_on_next {
+            self.recreate_context_on_next = false;
             args.recreate_context = true;
         }
 
@@ -297,14 +298,15 @@ impl Connection {
         self.receiver.recv().await
     }
 
-    async fn ping(&mut self) -> Result<(), Error> {
+    /// Send a ping message to the Node.js process
+    pub async fn ping(&mut self) -> Result<u32, Error> {
         let message_id = self.next_id;
         let req_id = self.next_req_id;
         self.next_req_id += 1;
         self.next_id += 1;
         let message = HostToWorkerMessage::new(req_id, message_id, HostToWorkerMessageData::Ping);
         message.write_to(&mut self.stream).await?;
-        Ok(())
+        Ok(req_id)
     }
 
     /// Run a script and wait for it to finish, accumulating console messages seen along the way.
@@ -587,7 +589,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn many_connections() {
+    async fn high_connection_count() {
         let mut sidecar = JsSidecar::new(Some(1)).await.unwrap();
 
         stream::iter(0..10000)
