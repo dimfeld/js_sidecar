@@ -52,6 +52,8 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
     return;
   }
 
+  let start = process.hrtime.bigint();
+
   let sentResponse = false;
   const context: MessageContext = {
     protocol,
@@ -76,6 +78,9 @@ function handleRawMessage(protocol: Protocol, { id, reqId, type, data }: Incomin
       if (response != undefined || !sentResponse) {
         context.respond(response ?? null);
       }
+
+      let elapsed = Number(process.hrtime.bigint() - start) / 1e3;
+      debug(`handle: ${elapsed}us`);
     })
     .catch((e) => {
       debug('Failed to handle request:');

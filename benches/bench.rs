@@ -17,6 +17,19 @@ pub fn benchmark(c: &mut Criterion) {
             let mut conn = sidecar.connect().await.unwrap();
             conn.run_script_and_wait(RunScriptArgs {
                 code: "2 + 2".into(),
+                expr: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        })
+    });
+
+    group.bench_function("es_module", |b| {
+        b.to_async(&runtime).iter_with_large_drop(|| async {
+            let mut conn = sidecar.connect().await.unwrap();
+            conn.run_script_and_wait(RunScriptArgs {
+                code: "2 + 2".into(),
                 ..Default::default()
             })
             .await
@@ -32,6 +45,7 @@ pub fn benchmark(c: &mut Criterion) {
                 for _ in 0..iters {
                     conn.run_script_and_wait(RunScriptArgs {
                         code: "2 + 2".into(),
+                        expr: true,
                         recreate_context: true,
                         ..Default::default()
                     })

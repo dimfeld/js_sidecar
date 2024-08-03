@@ -596,10 +596,7 @@ mod tests {
             .for_each_concurrent(None, |_| async {
                 let mut connection = sidecar.connect().await.unwrap();
                 let args = RunScriptArgs {
-                    code: r##"
-                        2 + 2
-                "##
-                    .into(),
+                    code: r##"2 + 2"##.into(),
                     expr: true,
                     ..Default::default()
                 };

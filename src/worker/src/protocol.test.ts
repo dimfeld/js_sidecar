@@ -98,12 +98,12 @@ describe('Protocol', () => {
   it('respond sends correct response', () => {
     const sendMessageSpy = vi.spyOn(protocol, 'sendMessage');
 
-    protocol.respond(1, { result: 'success' });
+    protocol.respond(1, { globals: { a: 'b' }, returnValue: 5 });
 
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1,
       WorkerToHostMessage.RunResponse,
-      JSON.stringify({ result: 'success' })
+      JSON.stringify({ globals: { a: 'b' }, returnValue: 5 })
     );
   });
 

@@ -1,6 +1,7 @@
 import * as vm from 'vm';
 import type { MessageContext } from './types.js';
 import type { RunResponse, RunScriptArgs } from './api_types.js';
+import { debug } from './debug.js';
 
 const RUN_CTX_KEY = Symbol('runCtx');
 
@@ -55,6 +56,7 @@ function createContext(ctx: MessageContext, args: RunScriptArgs): RunContext {
 }
 
 export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promise<RunResponse> {
+  let start = process.hrtime.bigint();
   let run = createContext(ctx, args);
 
   let retVal;
@@ -66,7 +68,7 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
 
   if (args.expr) {
     retVal = vm.runInContext(args.code, run.context, {
-      filename: args.name,
+      filename: args.name || '<script>',
       timeout: args.timeoutMs ?? undefined,
     });
 
@@ -85,7 +87,10 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
       );
     }
 
-    let mod = new vm.SourceTextModule(args.code, { identifier: args.name, context: run.context });
+    let mod = new vm.SourceTextModule(args.code, {
+      identifier: args.name || '<script>',
+      context: run.context,
+    });
     await mod.link(doLink);
     await mod.evaluate();
   }
@@ -93,6 +98,8 @@ export async function runScript(args: RunScriptArgs, ctx: MessageContext): Promi
   const outputGlobals = args.returnKeys
     ? Object.fromEntries(args.returnKeys.map((key) => [key, run.context[key]]))
     : run.context;
+  let elapsed = Number(process.hrtime.bigint() - start) / 1e3;
+  debug(`Evaluated in ${elapsed}us`);
   return {
     globals: outputGlobals,
     returnValue: retVal,
