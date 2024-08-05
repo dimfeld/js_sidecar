@@ -24,6 +24,9 @@ tracing = "0.1.40"
 criterion = { version = "0.5.1", features = ["async_tokio", "tokio"] }
 tokio = { version = "1.36.0", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "test-util"] }
 
+[lib]
+bench = false
+
 [[bench]]
 name = "bench"
 harness = false
