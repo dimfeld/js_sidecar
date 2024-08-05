@@ -17,12 +17,12 @@ serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.121"
 tempfile = "3.10.1"
 thiserror = "1.0.63"
-tokio = { version = "1.36.0", features = ["io-util", "fs", "net", "process", "rt", "sync"] }
+tokio = { version = "1.36.0", features = ["io-util", "fs", "macros", "net", "process", "rt", "sync", "time" ] }
 tracing = "0.1.40"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio", "tokio"] }
-tokio = { version = "1.36.0", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "test-util"] }
+tokio = { version = "1.36.0", features = ["rt-multi-thread", "test-util"] }
 
 [lib]
 bench = false
